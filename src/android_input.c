@@ -44,12 +44,21 @@ static const ButtonLayout buttons[ANDROID_BTN_COUNT] = {
 /* Palette. One accent (warm orange) for the primary action; everything else
  * sits in muted slate so a colourblind player can still tell the primary
  * from the rest, and the overall overlay stops competing with the game. */
-#define COL_ACCENT_R   0xF0
-#define COL_ACCENT_G   0x58
-#define COL_ACCENT_B   0x28
-#define COL_NEUTRAL_R  0x28
-#define COL_NEUTRAL_G  0x30
-#define COL_NEUTRAL_B  0x3C
+/* HUD palette. Primary (FIRE) uses warm orange; secondaries use cyan.
+ * Fill is a dark navy common to all, letting the outline + corner
+ * brackets do the talking. */
+#define COL_PRIMARY_R   0xF0
+#define COL_PRIMARY_G   0x60
+#define COL_PRIMARY_B   0x30
+#define COL_SECONDARY_R 0x40
+#define COL_SECONDARY_G 0xB0
+#define COL_SECONDARY_B 0xD0
+#define COL_FILL_R      0x0C
+#define COL_FILL_G      0x12
+#define COL_FILL_B      0x20
+#define COL_FILL_PR_R   0x1E
+#define COL_FILL_PR_G   0x28
+#define COL_FILL_PR_B   0x40
 
 static bool btn_down[ANDROID_BTN_COUNT];
 static SDL_FingerID btn_finger[ANDROID_BTN_COUNT];
@@ -241,25 +250,104 @@ static void draw_text_centered(SDL_Renderer *r, const char *text, int cx, int cy
         draw_char(r, text[i], start_x + i * (glyph_w + glyph_gap), start_y, px);
 }
 
-static void draw_crosshair(SDL_Renderer *r, int cx, int cy, int size)
+static void fill_rect_rgba(SDL_Renderer *r, int x, int y, int w, int h,
+                            Uint8 cr, Uint8 cg, Uint8 cb, Uint8 ca)
 {
-    // 1px dark halo first so the bright stroke reads on any background,
-    // then the bright accent stroke over it.
-    SDL_SetRenderDrawColor(r, 0, 0, 0, 200);
-    SDL_Rect hh = { cx - size - 1, cy - 3, 2 * size + 2, 6 };
-    SDL_Rect vh = { cx - 3, cy - size - 1, 6, 2 * size + 2 };
-    SDL_RenderFillRect(r, &hh);
-    SDL_RenderFillRect(r, &vh);
+    SDL_SetRenderDrawColor(r, cr, cg, cb, ca);
+    SDL_Rect rct = { x, y, w, h };
+    SDL_RenderFillRect(r, &rct);
+}
 
-    SDL_SetRenderDrawColor(r, COL_ACCENT_R, COL_ACCENT_G, COL_ACCENT_B, 235);
-    SDL_Rect h = { cx - size, cy - 1, 2 * size, 3 };
-    SDL_Rect v = { cx - 1, cy - size, 3, 2 * size };
-    SDL_RenderFillRect(r, &h);
-    SDL_RenderFillRect(r, &v);
+static void draw_hud_button(SDL_Renderer *renderer, SDL_Rect r, bool primary,
+                            bool pressed, const char *label)
+{
+    Uint8 ar = primary ? COL_PRIMARY_R : COL_SECONDARY_R;
+    Uint8 ag = primary ? COL_PRIMARY_G : COL_SECONDARY_G;
+    Uint8 ab = primary ? COL_PRIMARY_B : COL_SECONDARY_B;
 
-    // centre gap — cut a 1px hole so the crosshair doesn't obscure the
-    // ship itself when the finger sits close to it.
-    SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
+    // Drop shadow — sells separation from busy backgrounds.
+    fill_rect_rgba(renderer, r.x + 4, r.y + 6, r.w, r.h, 0, 0, 0, 110);
+
+    // Main fill.
+    if (pressed) {
+        fill_rect_rgba(renderer, r.x, r.y, r.w, r.h,
+                       COL_FILL_PR_R, COL_FILL_PR_G, COL_FILL_PR_B, 225);
+        // Faked inner glow: concentric alpha rects in the accent colour.
+        for (int i = 1; i <= 4; ++i) {
+            int inset = i * (r.h / 30 + 1);
+            if (inset * 2 >= r.w || inset * 2 >= r.h) break;
+            Uint8 alpha = (Uint8)(80 - i * 15);
+            fill_rect_rgba(renderer, r.x + inset, r.y + inset,
+                           r.w - 2 * inset, r.h - 2 * inset,
+                           ar, ag, ab, alpha);
+        }
+    } else {
+        fill_rect_rgba(renderer, r.x, r.y, r.w, r.h,
+                       COL_FILL_R, COL_FILL_G, COL_FILL_B, 185);
+    }
+
+    // Outline in the accent colour.
+    int ow = pressed ? 3 : 2;
+    SDL_SetRenderDrawColor(renderer, ar, ag, ab, pressed ? 255 : 215);
+    for (int t = 0; t < ow; ++t) {
+        SDL_Rect e = { r.x + t, r.y + t, r.w - 2 * t, r.h - 2 * t };
+        SDL_RenderDrawRect(renderer, &e);
+    }
+
+    // Corner brackets — the HUD touch. Each corner gets two small
+    // filled rects forming an L.
+    int bshort = (r.h < r.w ? r.h : r.w);
+    int bl = bshort / (pressed ? 4 : 5);
+    int bt = pressed ? 4 : 3;
+    SDL_Rect brks[8] = {
+        // Top-left
+        { r.x,                r.y,                bl, bt },
+        { r.x,                r.y,                bt, bl },
+        // Top-right
+        { r.x + r.w - bl,     r.y,                bl, bt },
+        { r.x + r.w - bt,     r.y,                bt, bl },
+        // Bottom-left
+        { r.x,                r.y + r.h - bt,     bl, bt },
+        { r.x,                r.y + r.h - bl,     bt, bl },
+        // Bottom-right
+        { r.x + r.w - bl,     r.y + r.h - bt,     bl, bt },
+        { r.x + r.w - bt,     r.y + r.h - bl,     bt, bl },
+    };
+    SDL_SetRenderDrawColor(renderer, ar, ag, ab, 255);
+    for (int i = 0; i < 8; ++i) SDL_RenderFillRect(renderer, &brks[i]);
+
+    // Label.
+    int label_px = r.h / 14;
+    if (r.h < 80) label_px = r.h / 18;
+    if (label_px < 1) label_px = 1;
+    SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 248);
+    draw_text_centered(renderer, label, r.x + r.w / 2, r.y + r.h / 2, label_px);
+}
+
+static void draw_hud_crosshair(SDL_Renderer *r, int cx, int cy, int size)
+{
+    int gap = size / 4;
+    if (gap < 4) gap = 4;
+    int arm = size - gap;
+    if (arm < 3) arm = 3;
+
+    // Dark halo around every stroke so the orange reads on bright enemies
+    // and starfields alike.
+    fill_rect_rgba(r, cx - size - 1, cy - 3, arm + 2, 6, 0, 0, 0, 200);
+    fill_rect_rgba(r, cx + gap - 1,  cy - 3, arm + 2, 6, 0, 0, 0, 200);
+    fill_rect_rgba(r, cx - 3, cy - size - 1, 6, arm + 2, 0, 0, 0, 200);
+    fill_rect_rgba(r, cx - 3, cy + gap - 1,  6, arm + 2, 0, 0, 0, 200);
+
+    // Orange strokes with centre gap.
+    Uint8 ar = COL_PRIMARY_R, ag = COL_PRIMARY_G, ab = COL_PRIMARY_B;
+    fill_rect_rgba(r, cx - size, cy - 1, arm, 3, ar, ag, ab, 240);
+    fill_rect_rgba(r, cx + gap,  cy - 1, arm, 3, ar, ag, ab, 240);
+    fill_rect_rgba(r, cx - 1, cy - size, 3, arm, ar, ag, ab, 240);
+    fill_rect_rgba(r, cx - 1, cy + gap,  3, arm, ar, ag, ab, 240);
+
+    // Centre dot with halo so the ship isn't hidden when touched close.
+    fill_rect_rgba(r, cx - 3, cy - 3, 6, 6, 0, 0, 0, 200);
+    fill_rect_rgba(r, cx - 2, cy - 2, 4, 4, ar, ag, ab, 240);
 }
 
 void android_input_render_overlay(SDL_Renderer *renderer, int win_w, int win_h)
@@ -274,60 +362,14 @@ void android_input_render_overlay(SDL_Renderer *renderer, int win_w, int win_h)
     for (int i = 0; i < ANDROID_BTN_COUNT; ++i) {
         SDL_Rect r;
         button_rect_to_window(&buttons[i], win_w, win_h, &r);
-
-        bool down = btn_down[i];
-        bool accent = buttons[i].is_primary;
-
-        // Fill.
-        Uint8 fr, fg, fb;
-        if (accent) { fr = COL_ACCENT_R; fg = COL_ACCENT_G; fb = COL_ACCENT_B; }
-        else        { fr = COL_NEUTRAL_R; fg = COL_NEUTRAL_G; fb = COL_NEUTRAL_B; }
-        Uint8 fill_alpha = down ? 225 : (accent ? 175 : 140);
-        // Pressed brightens the fill too.
-        if (down) {
-            fr = (Uint8)((int)fr + ((255 - fr) / 3));
-            fg = (Uint8)((int)fg + ((255 - fg) / 3));
-            fb = (Uint8)((int)fb + ((255 - fb) / 3));
-        }
-        SDL_SetRenderDrawColor(renderer, fr, fg, fb, fill_alpha);
-        SDL_RenderFillRect(renderer, &r);
-
-        // Pressed-state inset — an inner rect drawn in a brighter fill to
-        // sell the "pushed down" affordance without animating.
-        if (down) {
-            int inset = r.h / 20;
-            if (inset < 3) inset = 3;
-            SDL_Rect ir = { r.x + inset, r.y + inset, r.w - 2 * inset, r.h - 2 * inset };
-            Uint8 br = (Uint8)((int)fr + ((255 - fr) / 2));
-            Uint8 bg = (Uint8)((int)fg + ((255 - fg) / 2));
-            Uint8 bb = (Uint8)((int)fb + ((255 - fb) / 2));
-            SDL_SetRenderDrawColor(renderer, br, bg, bb, 230);
-            SDL_RenderFillRect(renderer, &ir);
-        }
-
-        // Border — 2px unpressed, 3px pressed.
-        int border_passes = down ? 3 : 2;
-        Uint8 border_alpha = down ? 255 : 200;
-        SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, border_alpha);
-        for (int b = 0; b < border_passes; ++b) {
-            SDL_Rect br = { r.x + b, r.y + b, r.w - 2 * b, r.h - 2 * b };
-            SDL_RenderDrawRect(renderer, &br);
-        }
-
-        // Label.
-        int label_px = r.h / 14;
-        if (label_px < 2) label_px = 2;
-        // Smaller tiny menu button needs a smaller label.
-        if (r.h < 80) label_px = r.h / 18;
-        if (label_px < 1) label_px = 1;
-        SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 245);
-        draw_text_centered(renderer, buttons[i].label, r.x + r.w / 2, r.y + r.h / 2, label_px);
+        draw_hud_button(renderer, r, buttons[i].is_primary, btn_down[i],
+                        buttons[i].label);
     }
 
     if (ship_finger != SHIP_FINGER_NONE) {
-        int size = win_h / 36;
-        if (size < 10) size = 10;
-        draw_crosshair(renderer, ship_target_win_x, ship_target_win_y, size);
+        int size = win_h / 28;
+        if (size < 14) size = 14;
+        draw_hud_crosshair(renderer, ship_target_win_x, ship_target_win_y, size);
     }
 
     SDL_SetRenderDrawBlendMode(renderer, old);
