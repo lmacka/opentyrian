@@ -81,6 +81,12 @@ void android_input_init(void)
 {
     if (initialized) return;
     reset_button_state();
+    // Stop SDL from exposing the phone's accelerometer as a joystick.
+    // Default is on, and any phone tilt pushes the axis past the
+    // direction threshold, which push_joysticks_as_keyboard() then
+    // translates into a repeating SDL_SCANCODE_DOWN — menus cycle.
+    // Must be set before SDL_InitSubSystem(SDL_INIT_JOYSTICK).
+    SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
     initialized = true;
 }
 
