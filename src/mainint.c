@@ -18,6 +18,7 @@
  */
 #include "mainint.h"
 
+#include "android_input.h"
 #include "backgrnd.h"
 #include "config.h"
 #include "editship.h"
@@ -3563,7 +3564,10 @@ redo:
 					}
 				}
 
-				/* mouse input */
+				/* mouse input — skipped on Android; touch drives ship via
+				 * android_input_get_ship_target() below and buttons replace
+				 * mouse button fire. */
+#ifndef __ANDROID__
 				if ((inputDevice == 0 || inputDevice == 2) && has_mouse)
 				{
 					button[0] |= (mouseButtonsDown & SDL_BUTTON_LMASK) != 0;
@@ -3575,6 +3579,29 @@ redo:
 					mouseGetRelativePosition(&mouseXR, &mouseYR);
 					mouseXC += mouseXR;
 					mouseYC += mouseYR;
+				}
+#endif
+
+				/* android touch input: ship follows right-thumb drag, floating
+				 * buttons on the left drive the action keys. Always active on
+				 * Android regardless of inputDevice. */
+				{
+					int tx, ty;
+					if (android_input_get_ship_target(&tx, &ty))
+					{
+						mouseXC += tx - this_player->x;
+						mouseYC += ty - this_player->y;
+					}
+					if (android_input_button_down(ANDROID_BTN_FIRE))
+						button[0] = true;
+					if (android_input_button_down(ANDROID_BTN_LEFT_SIDEKICK))
+						button[1] = true;
+					if (android_input_button_down(ANDROID_BTN_RIGHT_SIDEKICK))
+						button[2] = true;
+					if (android_input_button_down(ANDROID_BTN_CHANGE_WEAPON))
+						button[3] = true;
+					if (android_input_button_down(ANDROID_BTN_MENU))
+						ingamemenu_pressed = true;
 				}
 
 				/* keyboard input */

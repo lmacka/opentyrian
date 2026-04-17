@@ -18,6 +18,7 @@
  */
 #include "opentyr.h"
 
+#include "android_input.h"
 #include "config.h"
 #include "destruct.h"
 #include "editship.h"
@@ -763,6 +764,8 @@ int main(int argc, char *argv[])
 		printf("Failed to initialize SDL: %s\n", SDL_GetError());
 		return -1;
 	}
+
+	android_input_init();
 
 	loadConfiguration();
 	loadSaves();

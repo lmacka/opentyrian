@@ -18,6 +18,7 @@
  */
 #include "keyboard.h"
 
+#include "android_input.h"
 #include "joystick.h"
 #include "mouse.h"
 #include "network.h"
@@ -361,6 +362,12 @@ void handleSdlEvents(void)
 				mapWindowPointToScreen(&ev.button.x, &ev.button.y);
 
 				mouseButtonsDown &= ~SDL_BUTTON(ev.button.button);
+				break;
+
+			case SDL_FINGERDOWN:
+			case SDL_FINGERMOTION:
+			case SDL_FINGERUP:
+				android_input_handle_event(&ev);
 				break;
 
 			case SDL_QUIT:

@@ -18,6 +18,7 @@
  */
 #include "video.h"
 
+#include "android_input.h"
 #include "keyboard.h"
 #include "opentyr.h"
 #include "palette.h"
@@ -394,6 +395,13 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
 	SDL_RenderClear(main_window_renderer);
 	SDL_RenderCopy(main_window_renderer, main_window_texture, NULL, &dst_rect);
+
+	{
+		int win_w, win_h;
+		SDL_GetWindowSize(main_window, &win_w, &win_h);
+		android_input_render_overlay(main_window_renderer, win_w, win_h);
+	}
+
 	SDL_RenderPresent(main_window_renderer);
 
 	// Save output rect to be used by mouse functions
