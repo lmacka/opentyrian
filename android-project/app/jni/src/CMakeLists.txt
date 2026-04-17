@@ -19,6 +19,7 @@ target_compile_definitions(main PRIVATE
     TARGET_UNIX
     HAVE_SDL_NET
     NDEBUG
+    TYRIAN_DIR="/data/data/com.lmacka.opentyrian/files/tyrian"
 )
 
 target_compile_options(main PRIVATE
