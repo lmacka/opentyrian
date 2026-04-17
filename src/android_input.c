@@ -14,22 +14,42 @@
 #include <SDL.h>
 #include <string.h>
 
-#define SHIP_FINGER_NONE   ((SDL_FingerID)-1)
+#define SHIP_FINGER_NONE    ((SDL_FingerID)-1)
 #define GAMEPLAY_TIMEOUT_MS 250
 
 typedef struct {
-    int x, y, w, h;   // virtual 1000x1000 coords
-    Uint32 color;     // 0xRRGGBB
+    int x, y, w, h;  // virtual 1000x1000 coords
+    bool is_primary; // gets the accent colour
     const char *label;
 } ButtonLayout;
 
+/* Layout anchored to the left edge of the visible canvas.
+ *
+ * MENU: tiny top-left, far from the action zone — no accidental pauses.
+ * L / R: mid-height pair, small (sidekicks are secondary actions).
+ * MODE: medium, above FIRE with a real gap so a slipping thumb doesn't
+ *       trigger weapon-mode change mid-dodge.
+ * FIRE: bottom-left, large, the only accent colour. Anchored 170 virtual
+ *       units above the canvas bottom so it stays clear of the Android
+ *       gesture navigation zone on modern devices.
+ */
 static const ButtonLayout buttons[ANDROID_BTN_COUNT] = {
-    [ANDROID_BTN_FIRE]           = { 40,  650, 200, 200, 0xE04040, "FIRE" },
-    [ANDROID_BTN_CHANGE_WEAPON]  = { 40,  430, 200, 200, 0x4080E0, "MODE" },
-    [ANDROID_BTN_LEFT_SIDEKICK]  = { 40,   40, 130, 130, 0x40C060, "L"    },
-    [ANDROID_BTN_RIGHT_SIDEKICK] = { 190,  40, 130, 130, 0xE0C040, "R"    },
-    [ANDROID_BTN_MENU]           = { 40,  220, 130, 130, 0x808080, "MENU" },
+    [ANDROID_BTN_MENU]           = {  60,  50,  80,  60, false, "MENU" },
+    [ANDROID_BTN_LEFT_SIDEKICK]  = {  60, 300, 120, 120, false, "L"    },
+    [ANDROID_BTN_RIGHT_SIDEKICK] = { 200, 300, 120, 120, false, "R"    },
+    [ANDROID_BTN_CHANGE_WEAPON]  = {  60, 450, 180, 140, false, "MODE" },
+    [ANDROID_BTN_FIRE]           = {  60, 620, 220, 210, true,  "FIRE" },
 };
+
+/* Palette. One accent (warm orange) for the primary action; everything else
+ * sits in muted slate so a colourblind player can still tell the primary
+ * from the rest, and the overall overlay stops competing with the game. */
+#define COL_ACCENT_R   0xF0
+#define COL_ACCENT_G   0x58
+#define COL_ACCENT_B   0x28
+#define COL_NEUTRAL_R  0x28
+#define COL_NEUTRAL_G  0x30
+#define COL_NEUTRAL_B  0x3C
 
 static bool btn_down[ANDROID_BTN_COUNT];
 static SDL_FingerID btn_finger[ANDROID_BTN_COUNT];
@@ -44,7 +64,6 @@ static Uint32 last_gameplay_tick;
 /* 5x7 bitmap font, one byte per column (LSB = top row). Only the glyphs
  * used by button labels are populated. */
 static const struct { char c; Uint8 col[5]; } glyphs[] = {
-    {'A', {0x7E, 0x11, 0x11, 0x11, 0x7E}},
     {'D', {0x7F, 0x41, 0x41, 0x22, 0x1C}},
     {'E', {0x7F, 0x49, 0x49, 0x49, 0x41}},
     {'F', {0x7F, 0x09, 0x09, 0x09, 0x01}},
@@ -81,11 +100,10 @@ void android_input_init(void)
 {
     if (initialized) return;
     reset_button_state();
-    // Stop SDL from exposing the phone's accelerometer as a joystick.
-    // Default is on, and any phone tilt pushes the axis past the
-    // direction threshold, which push_joysticks_as_keyboard() then
-    // translates into a repeating SDL_SCANCODE_DOWN — menus cycle.
-    // Must be set before SDL_InitSubSystem(SDL_INIT_JOYSTICK).
+    // Android exposes the accelerometer as a joystick by default; its
+    // permanently-deflected axis then feeds push_joysticks_as_keyboard()
+    // which spams SDL_SCANCODE_DOWN at the menus. Disable here, before
+    // SDL_InitSubSystem(SDL_INIT_JOYSTICK) runs.
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
     initialized = true;
 }
@@ -118,12 +136,11 @@ static bool point_in_rect(int x, int y, const SDL_Rect *r)
 
 static int hit_test_button(int win_x, int win_y, int win_w, int win_h)
 {
-    if (!gameplay_active()) return -1; // buttons only hot during gameplay
+    if (!gameplay_active()) return -1;
     for (int i = 0; i < ANDROID_BTN_COUNT; ++i) {
         SDL_Rect r;
         button_rect_to_window(&buttons[i], win_w, win_h, &r);
-        if (point_in_rect(win_x, win_y, &r))
-            return i;
+        if (point_in_rect(win_x, win_y, &r)) return i;
     }
     return -1;
 }
@@ -165,9 +182,8 @@ void android_input_handle_event(const SDL_Event *ev)
             break;
         }
         case SDL_FINGERUP: {
-            if (ev->tfinger.fingerId == ship_finger) {
+            if (ev->tfinger.fingerId == ship_finger)
                 ship_finger = SHIP_FINGER_NONE;
-            }
             for (int i = 0; i < ANDROID_BTN_COUNT; ++i) {
                 if (btn_finger[i] == ev->tfinger.fingerId) {
                     btn_down[i] = false;
@@ -198,11 +214,6 @@ bool android_input_get_ship_target(int *out_x, int *out_y)
     return true;
 }
 
-static void set_color(SDL_Renderer *r, Uint32 rgb, Uint8 a)
-{
-    SDL_SetRenderDrawColor(r, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, a);
-}
-
 static void draw_char(SDL_Renderer *r, char c, int x, int y, int px)
 {
     const Uint8 *g = find_glyph(c);
@@ -226,9 +237,29 @@ static void draw_text_centered(SDL_Renderer *r, const char *text, int cx, int cy
     int total_h = GLYPH_ROWS * px;
     int start_x = cx - total_w / 2;
     int start_y = cy - total_h / 2;
-    for (int i = 0; i < len; ++i) {
+    for (int i = 0; i < len; ++i)
         draw_char(r, text[i], start_x + i * (glyph_w + glyph_gap), start_y, px);
-    }
+}
+
+static void draw_crosshair(SDL_Renderer *r, int cx, int cy, int size)
+{
+    // 1px dark halo first so the bright stroke reads on any background,
+    // then the bright accent stroke over it.
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 200);
+    SDL_Rect hh = { cx - size - 1, cy - 3, 2 * size + 2, 6 };
+    SDL_Rect vh = { cx - 3, cy - size - 1, 6, 2 * size + 2 };
+    SDL_RenderFillRect(r, &hh);
+    SDL_RenderFillRect(r, &vh);
+
+    SDL_SetRenderDrawColor(r, COL_ACCENT_R, COL_ACCENT_G, COL_ACCENT_B, 235);
+    SDL_Rect h = { cx - size, cy - 1, 2 * size, 3 };
+    SDL_Rect v = { cx - 1, cy - size, 3, 2 * size };
+    SDL_RenderFillRect(r, &h);
+    SDL_RenderFillRect(r, &v);
+
+    // centre gap — cut a 1px hole so the crosshair doesn't obscure the
+    // ship itself when the finger sits close to it.
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
 }
 
 void android_input_render_overlay(SDL_Renderer *renderer, int win_w, int win_h)
@@ -240,43 +271,66 @@ void android_input_render_overlay(SDL_Renderer *renderer, int win_w, int win_h)
     SDL_GetRenderDrawBlendMode(renderer, &old);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    int px_unit = win_h / 1000;
-    if (px_unit < 1) px_unit = 1;
-
     for (int i = 0; i < ANDROID_BTN_COUNT; ++i) {
         SDL_Rect r;
         button_rect_to_window(&buttons[i], win_w, win_h, &r);
 
-        Uint8 fill_alpha = btn_down[i] ? 200 : 110;
-        set_color(renderer, buttons[i].color, fill_alpha);
+        bool down = btn_down[i];
+        bool accent = buttons[i].is_primary;
+
+        // Fill.
+        Uint8 fr, fg, fb;
+        if (accent) { fr = COL_ACCENT_R; fg = COL_ACCENT_G; fb = COL_ACCENT_B; }
+        else        { fr = COL_NEUTRAL_R; fg = COL_NEUTRAL_G; fb = COL_NEUTRAL_B; }
+        Uint8 fill_alpha = down ? 225 : (accent ? 175 : 140);
+        // Pressed brightens the fill too.
+        if (down) {
+            fr = (Uint8)((int)fr + ((255 - fr) / 3));
+            fg = (Uint8)((int)fg + ((255 - fg) / 3));
+            fb = (Uint8)((int)fb + ((255 - fb) / 3));
+        }
+        SDL_SetRenderDrawColor(renderer, fr, fg, fb, fill_alpha);
         SDL_RenderFillRect(renderer, &r);
 
-        set_color(renderer, 0xFFFFFF, btn_down[i] ? 255 : 180);
-        SDL_RenderDrawRect(renderer, &r);
-        SDL_Rect inner = { r.x + 1, r.y + 1, r.w - 2, r.h - 2 };
-        SDL_RenderDrawRect(renderer, &inner);
+        // Pressed-state inset — an inner rect drawn in a brighter fill to
+        // sell the "pushed down" affordance without animating.
+        if (down) {
+            int inset = r.h / 20;
+            if (inset < 3) inset = 3;
+            SDL_Rect ir = { r.x + inset, r.y + inset, r.w - 2 * inset, r.h - 2 * inset };
+            Uint8 br = (Uint8)((int)fr + ((255 - fr) / 2));
+            Uint8 bg = (Uint8)((int)fg + ((255 - fg) / 2));
+            Uint8 bb = (Uint8)((int)fb + ((255 - fb) / 2));
+            SDL_SetRenderDrawColor(renderer, br, bg, bb, 230);
+            SDL_RenderFillRect(renderer, &ir);
+        }
 
-        // Label text, scaled to button size.
+        // Border — 2px unpressed, 3px pressed.
+        int border_passes = down ? 3 : 2;
+        Uint8 border_alpha = down ? 255 : 200;
+        SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, border_alpha);
+        for (int b = 0; b < border_passes; ++b) {
+            SDL_Rect br = { r.x + b, r.y + b, r.w - 2 * b, r.h - 2 * b };
+            SDL_RenderDrawRect(renderer, &br);
+        }
+
+        // Label.
         int label_px = r.h / 14;
         if (label_px < 2) label_px = 2;
-        set_color(renderer, 0xFFFFFF, 240);
+        // Smaller tiny menu button needs a smaller label.
+        if (r.h < 80) label_px = r.h / 18;
+        if (label_px < 1) label_px = 1;
+        SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 245);
         draw_text_centered(renderer, buttons[i].label, r.x + r.w / 2, r.y + r.h / 2, label_px);
     }
 
     if (ship_finger != SHIP_FINGER_NONE) {
-        int cx = ship_target_win_x;
-        int cy = ship_target_win_y;
-        int size = win_h / 40;
-        if (size < 8) size = 8;
-        set_color(renderer, 0xFFFFFF, 180);
-        SDL_Rect h = { cx - size, cy - 1, 2 * size, 3 };
-        SDL_Rect v = { cx - 1, cy - size, 3, 2 * size };
-        SDL_RenderFillRect(renderer, &h);
-        SDL_RenderFillRect(renderer, &v);
+        int size = win_h / 36;
+        if (size < 10) size = 10;
+        draw_crosshair(renderer, ship_target_win_x, ship_target_win_y, size);
     }
 
     SDL_SetRenderDrawBlendMode(renderer, old);
-    (void)px_unit;
 }
 
 #else  // !__ANDROID__
