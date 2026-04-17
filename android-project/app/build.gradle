@@ -1,0 +1,116 @@
+apply plugin: 'com.android.application'
+
+// ---------- Tyrian 2.1 freeware data pipeline ----------
+def tyrianZipUrl = 'https://camanis.net/tyrian/tyrian21.zip'
+def tyrianZipSha256 = '7790d09a2a3addcd33c66ef063d5900eb81cc9c342f4807eb8356364dd1d9277'
+def tyrianCacheDir = new File(project.buildDir, 'tyrian-data')
+def tyrianZipFile = new File(tyrianCacheDir, 'tyrian21.zip')
+def tyrianAssetsDir = file('src/main/assets/tyrian')
+
+task downloadTyrianData {
+    outputs.file tyrianZipFile
+    doLast {
+        tyrianCacheDir.mkdirs()
+        if (!tyrianZipFile.exists()) {
+            println "Downloading ${tyrianZipUrl}"
+            new java.net.URL(tyrianZipUrl).withInputStream { i ->
+                tyrianZipFile.withOutputStream { it << i }
+            }
+        }
+        def actual = java.security.MessageDigest.getInstance('SHA-256')
+            .digest(tyrianZipFile.bytes).encodeHex().toString()
+        if (actual != tyrianZipSha256) {
+            throw new GradleException("tyrian21.zip SHA-256 mismatch: expected ${tyrianZipSha256}, got ${actual}")
+        }
+    }
+}
+
+task extractTyrianData(type: Copy, dependsOn: downloadTyrianData) {
+    from(zipTree(tyrianZipFile)) {
+        include 'tyrian21/**'
+        eachFile { fcd ->
+            fcd.path = fcd.path.replaceFirst('^tyrian21/', '')
+        }
+        includeEmptyDirs = false
+    }
+    into tyrianAssetsDir
+    outputs.dir tyrianAssetsDir
+}
+
+preBuild.dependsOn extractTyrianData
+
+clean.doFirst {
+    delete tyrianAssetsDir
+}
+// --------------------------------------------------------
+
+android {
+    namespace "com.lmacka.opentyrian"
+    compileSdk 35
+    ndkVersion "26.3.11579264"
+
+    defaultConfig {
+        applicationId "com.lmacka.opentyrian"
+        minSdkVersion 21
+        targetSdkVersion 34
+        versionCode 1
+        versionName "2.1.20221123-android1"
+
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_APP_PLATFORM=android-21",
+                          "-DANDROID_STL=c++_static"
+                abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            def keystorePath = System.getenv("OPENTYRIAN_KEYSTORE") ?: "${System.getProperty('user.home')}/.android/opentyrian-release.jks"
+            def keystorePassword = System.getenv("OPENTYRIAN_KEYSTORE_PASSWORD")
+            def keyAliasName = System.getenv("OPENTYRIAN_KEY_ALIAS") ?: "opentyrian"
+            def keyPasswordValue = System.getenv("OPENTYRIAN_KEY_PASSWORD")
+
+            if (keystorePassword != null && file(keystorePath).exists()) {
+                storeFile file(keystorePath)
+                storePassword keystorePassword
+                keyAlias keyAliasName
+                keyPassword keyPasswordValue ?: keystorePassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv("OPENTYRIAN_KEYSTORE_PASSWORD") != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+        debug {
+            debuggable true
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'jni/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+
+    applicationVariants.all { variant ->
+        tasks["merge${variant.name.capitalize()}Assets"]
+            .dependsOn("externalNativeBuild${variant.name.capitalize()}")
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+}
