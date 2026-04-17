@@ -3383,6 +3383,8 @@ redo:
 		inputDevice = 0;
 	}
 
+	android_input_note_gameplay_frame();
+
 	mouseXC = 0;
 	mouseYC = 0;
 	accelXC = 0;

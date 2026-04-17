@@ -21,6 +21,10 @@ void android_input_init(void);
 void android_input_handle_event(const SDL_Event *ev);
 bool android_input_button_down(AndroidButton b);
 
+/* Called from the gameplay frame; gates overlay visibility and ship target
+ * so menu taps route straight to SDL's native touch-to-mouse. */
+void android_input_note_gameplay_frame(void);
+
 /* When a ship-tracking finger is active, writes the target ship position
  * in game-screen coordinates and returns true. Returns false otherwise. */
 bool android_input_get_ship_target(int *out_x, int *out_y);
