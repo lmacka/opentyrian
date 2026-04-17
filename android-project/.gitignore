@@ -8,3 +8,4 @@ captures/
 .cxx/
 app/src/main/assets/tyrian/
 app/libs/
+*.apk
