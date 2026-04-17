@@ -33,4 +33,10 @@ bool android_input_get_ship_target(int *out_x, int *out_y);
  * Called from video.c between RenderCopy and RenderPresent. */
 void android_input_render_overlay(SDL_Renderer *renderer, int win_w, int win_h);
 
+/* Ambient bezel: fills the window with a dark starfield so the sides of
+ * the aspect-preserved game surface don't read as dead black. Called from
+ * video.c before RenderCopy (game blits over the top). */
+void android_input_render_bezel(SDL_Renderer *renderer, int win_w, int win_h,
+                                const SDL_Rect *game_rect);
+
 #endif

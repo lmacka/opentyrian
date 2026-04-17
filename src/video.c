@@ -38,7 +38,11 @@ const char *const scaling_mode_names[ScalingMode_MAX] = {
 };
 
 int fullscreen_display;
+#ifdef __ANDROID__
+ScalingMode scaling_mode = SCALE_ASPECT_8_5;
+#else
 ScalingMode scaling_mode = SCALE_INTEGER;
+#endif
 static SDL_Rect last_output_rect = { 0, 0, vga_width, vga_height };
 
 SDL_Surface *VGAScreen, *VGAScreenSeg;
@@ -127,6 +131,12 @@ void deinit_video(void)
 
 static void init_renderer(void)
 {
+#ifdef __ANDROID__
+	// Smooth the non-integer stretch from 320x200 (or scaler output) to a
+	// 1728x1080-ish landscape window. Nearest-neighbour at a 5.4x factor
+	// leaves visible 5px/6px column alternation; linear is GPU-cheap.
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+#endif
 	main_window_renderer = SDL_CreateRenderer(main_window, -1, 0);
 
 	if (main_window_renderer == NULL)
@@ -392,15 +402,17 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	calc_dst_render_rect(src_surface, &dst_rect);
 
 	// Clear the window and blit the output texture to it
-	SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
-	SDL_RenderClear(main_window_renderer);
+	int win_w, win_h;
+	SDL_GetWindowSize(main_window, &win_w, &win_h);
+
+	// Ambient bezel on platforms where letterboxing is unavoidable.
+	// Fills the window with a dark starfield before the game blits over
+	// the centre, so side bars look designed rather than forgotten.
+	android_input_render_bezel(main_window_renderer, win_w, win_h, &dst_rect);
+
 	SDL_RenderCopy(main_window_renderer, main_window_texture, NULL, &dst_rect);
 
-	{
-		int win_w, win_h;
-		SDL_GetWindowSize(main_window, &win_w, &win_h);
-		android_input_render_overlay(main_window_renderer, win_w, win_h);
-	}
+	android_input_render_overlay(main_window_renderer, win_w, win_h);
 
 	SDL_RenderPresent(main_window_renderer);
 

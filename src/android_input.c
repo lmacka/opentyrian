@@ -316,10 +316,10 @@ static void draw_hud_button(SDL_Renderer *renderer, SDL_Rect r, bool primary,
     SDL_SetRenderDrawColor(renderer, ar, ag, ab, 255);
     for (int i = 0; i < 8; ++i) SDL_RenderFillRect(renderer, &brks[i]);
 
-    // Label.
-    int label_px = r.h / 14;
-    if (r.h < 80) label_px = r.h / 18;
-    if (label_px < 1) label_px = 1;
+    // Label. Target ~18% of button height — any larger and the 5x7 font
+    // turns into a shouty grid of squares.
+    int label_px = r.h / 36;
+    if (label_px < 2) label_px = 2;
     SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 248);
     draw_text_centered(renderer, label, r.x + r.w / 2, r.y + r.h / 2, label_px);
 }
@@ -375,6 +375,77 @@ void android_input_render_overlay(SDL_Renderer *renderer, int win_w, int win_h)
     SDL_SetRenderDrawBlendMode(renderer, old);
 }
 
+/* ---- ambient bezel starfield ------------------------------------------ */
+
+#define STAR_COUNT 180
+
+typedef struct { int x, y; Uint8 brightness, size; } Star;
+static Star stars[STAR_COUNT];
+static int stars_cached_w, stars_cached_h;
+
+static Uint32 lcg_next(Uint32 *s)
+{
+    *s = (*s) * 1103515245u + 12345u;
+    return (*s >> 16) & 0x7FFFu;
+}
+
+static void regenerate_stars(int win_w, int win_h)
+{
+    Uint32 seed = 0x5EEDC01D;
+    for (int i = 0; i < STAR_COUNT; ++i) {
+        stars[i].x = lcg_next(&seed) % (win_w > 0 ? win_w : 1);
+        stars[i].y = lcg_next(&seed) % (win_h > 0 ? win_h : 1);
+        Uint32 r = lcg_next(&seed) % 100;
+        stars[i].brightness = (Uint8)(80 + r * 175 / 100);   // 80-255
+        stars[i].size = (r > 88) ? 2 : 1;                    // ~11% are 2x2
+    }
+    stars_cached_w = win_w;
+    stars_cached_h = win_h;
+}
+
+void android_input_render_bezel(SDL_Renderer *r, int win_w, int win_h,
+                                const SDL_Rect *game_rect)
+{
+    if (!initialized) android_input_init();
+    if (stars_cached_w != win_w || stars_cached_h != win_h)
+        regenerate_stars(win_w, win_h);
+
+    // Deep navy background instead of pure black, so the starfield reads
+    // and dark halos around HUD elements still have something to sit on.
+    SDL_SetRenderDrawColor(r, 0x04, 0x06, 0x0C, 255);
+    SDL_RenderClear(r);
+
+    SDL_BlendMode old;
+    SDL_GetRenderDrawBlendMode(r, &old);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+
+    for (int i = 0; i < STAR_COUNT; ++i) {
+        SDL_SetRenderDrawColor(r, stars[i].brightness, stars[i].brightness,
+                               stars[i].brightness, 230);
+        SDL_Rect px = { stars[i].x, stars[i].y, stars[i].size, stars[i].size };
+        SDL_RenderFillRect(r, &px);
+    }
+
+    // Thin cyan rule at the left and right edges of the game area — a
+    // "monitor bezel" cue so the eye sees the playfield as framed rather
+    // than pasted onto wallpaper. Drawn in the bezel (outside the game),
+    // 1px wide so it doesn't steal attention.
+    if (game_rect != NULL && game_rect->w > 0 && game_rect->h > 0) {
+        SDL_SetRenderDrawColor(r, COL_SECONDARY_R, COL_SECONDARY_G,
+                               COL_SECONDARY_B, 150);
+        if (game_rect->x > 0) {
+            SDL_Rect left = { game_rect->x - 2, game_rect->y, 2, game_rect->h };
+            SDL_RenderFillRect(r, &left);
+        }
+        if (game_rect->x + game_rect->w < win_w) {
+            SDL_Rect right = { game_rect->x + game_rect->w, game_rect->y, 2, game_rect->h };
+            SDL_RenderFillRect(r, &right);
+        }
+    }
+
+    SDL_SetRenderDrawBlendMode(r, old);
+}
+
 #else  // !__ANDROID__
 
 void android_input_init(void) {}
@@ -383,5 +454,6 @@ void android_input_handle_event(const SDL_Event *ev) { (void)ev; }
 bool android_input_button_down(AndroidButton b) { (void)b; return false; }
 bool android_input_get_ship_target(int *x, int *y) { (void)x; (void)y; return false; }
 void android_input_render_overlay(SDL_Renderer *r, int w, int h) { (void)r; (void)w; (void)h; }
+void android_input_render_bezel(SDL_Renderer *r, int w, int h, const SDL_Rect *g) { (void)r; (void)w; (void)h; (void)g; }
 
 #endif
